@@ -1,21 +1,23 @@
 # -*- coding: utf-8 -*-
-import logging
 import gym
 import numpy as np
 import sys
-import tqdm
+import time
+import logging
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 LEARNING_RATE = 0.9
 REWARD_DISCOUNT_RATE = 0.8
 DISCOVERY_RATE = 1.0
-DISCOVERY_RATE_MINIMAL = 0.1
-DISCOVERY_RATE_DAMPING = 0.005
+DISCOVERY_RATE_MINIMAL = 0.05
+DISCOVERY_RATE_DAMPING = 0.0001
 
-EPISODES = 10_000
-MAX_STEPS = 50
+EPISODES = 15_000
+PLAY_STEPS = 50
 ROUNDS = 3
 
-LOG_LEVEL = "DEBUG"
+LOG_LEVEL = "INFO"
 
 logging.basicConfig()
 LOG = logging.getLogger()
@@ -50,7 +52,7 @@ class TaxiV3(object):
         self._env = env
 
     def refresh_discovery_rate(self):
-        new_discovery_rate = np.exp(-self._discovery_rate_damping * self._discovery_rate)
+        new_discovery_rate = self._discovery_rate - self._discovery_rate_damping
         self._discovery_rate = max(self._discovery_rate_minimal, new_discovery_rate)
 
     def get_action(self, random=True, training=False, state=None):
@@ -75,36 +77,61 @@ class TaxiV3(object):
         # State after reset: (304, {'prob': 1.0, 'action_mask': array([1, 1, 0, 0, 0, 0], dtype=int8)})
         for r in range(rounds):
             state, action = self._env.reset()
+            step = 0
             for s in range(max_step):
                 action = self.get_action(random=random, training=False, state=state)
                 new_state, reward, done, _, _ = self._env.step(action)
                 records += reward
                 self._env.render()
+                step = s
                 if done:
                     break
                 state = new_state
-            self.logger.info(f"Round {r} record: {records}")
+            self.logger.info(f"Round {r+1} record: {records}; Steps: {step+1}")
 
-        self.logger.info(f"Total records: {records}")
+    def training_q_learning(self, episodes: int = 10_000, allow_steps: int = 99):
+        bar_number = 10
+        sample_rate = 50
+        step_sample_list = []
+        self.logger.info(f"Training Q-Learning, with episodes {episodes} and max_step {allow_steps} per episode")
+        # ui_env = gym.wrappers.RecordEpisodeStatistics(self._env, deque_size=episodes)
+        for b in range(bar_number):
+            step_cost_list = []
+            with tqdm(total=int(episodes/bar_number), desc=f"Episode {b}", unit="episode") as progress_bar:
+                for e in range(int(episodes/bar_number)):
+                    state = self._env.reset()[0]
 
-    def training_q_learning(self, episodes: int = 10_000, max_steps: int = 99):
-        self.logger.info(f"Training Q-Learning, with episodes {episodes} and max_step {max_steps} per episode")
-        ui_env = gym.wrappers.RecordEpisodeStatistics(self._env, deque_size=episodes)
-        for _ in tqdm.tqdm(range(episodes)):
-            state = ui_env.reset()[0]
+                    for s in range(allow_steps):
+                        action = self.get_action(training=True, state=state)
+                        new_state, reward, done, _, _ = self._env.step(action)
 
-            for s in range(max_steps):
-                action = self.get_action(training=True, state=state)
-                new_state, reward, done, _, _ = ui_env.step(action)
+                        self._q_table[state, action] = self._q_table[state, action] + self._learning_rate * (
+                            reward + self._reward_discount_rate * np.max(self._q_table[new_state, :]) - self._q_table[state, action])
+                        if done:
+                            break
+                        state = new_state
 
-                self._q_table[state, action] = self._q_table[state, action] + self._learning_rate * (
-                        reward + self._reward_discount_rate * np.max(self._q_table[new_state, :]) - self._q_table[state, action])
-                if done:
-                    break
+                    step_cost_list.append(s + 1)
+                    self.refresh_discovery_rate()
 
-                state = new_state
+                    if (e + 1) % sample_rate == 0:
+                        avg_step = np.mean(step_cost_list[-sample_rate:])
+                        progress_bar.set_postfix({
+                            "episode": f"{int(episodes / bar_number * b + e + 1)}",
+                            "average_step_cost": "{0:.1f}".format(avg_step),
+                            "discovery_rate": '{0:.1f}'.format(self._discovery_rate)
+                        })
+                        step_sample_list.append(avg_step)
+                    progress_bar.update(1)
 
-            self.refresh_discovery_rate()
+        episodes_list = list(range(int(episodes/sample_rate)))
+        plt.plot(episodes_list, step_sample_list)
+        plt.xlabel(f"{sample_rate} Episodes")
+        plt.ylabel(f"Average Steps in {sample_rate} episodes")
+        plt.title('Q-Table on {}'.format('Taxi V3'))
+        plt.show(block=False)
+        plt.pause(5)
+        plt.close()
 
 
 if __name__ == "__main__":
@@ -117,15 +144,16 @@ if __name__ == "__main__":
                           discovery_rate_damping=DISCOVERY_RATE_DAMPING,
                           logger=LOG)
 
-    LOG.info(f"Drive taxi in random environment, with {ROUNDS} rounds, and each round {MAX_STEPS} steps")
-    taxi_v3_game.play(random=True, max_step=15, rounds=1)
+    LOG.info(f"Drive taxi in random environment, with 1 round, and each round {PLAY_STEPS} steps")
+    taxi_v3_game.play(random=True, max_step=PLAY_STEPS, rounds=1)
 
     env_training = gym.make('Taxi-v3', render_mode="rgb_array")
     taxi_v3_game.env = env_training
     taxi_v3_game.training_q_learning(episodes=EPISODES)
 
-    LOG.info(f"Drive taxi in Trained Q-Learning environment, with {ROUNDS} rounds, and each round {MAX_STEPS} steps")
+    LOG.info(f"Drive taxi in Trained Q-Learning environment, with {ROUNDS} rounds, and each round {PLAY_STEPS} steps")
     taxi_v3_game.env = env_play
-    taxi_v3_game.play(random=False, max_step=MAX_STEPS, rounds=20)
+    taxi_v3_game.play(random=False, max_step=PLAY_STEPS, rounds=ROUNDS)
 
+    time.sleep(5)
     taxi_v3_game.env.close()
