@@ -13,9 +13,10 @@ DISCOVERY_RATE = 1.0
 DISCOVERY_RATE_MINIMAL = 0.05
 DISCOVERY_RATE_DAMPING = 0.0001
 
-EPISODES = 15_000
-PLAY_STEPS = 50
+EPISODES = 10_000
+PLAY_STEPS = 30
 ROUNDS = 3
+SAMPLE_RATE = 50
 
 LOG_LEVEL = "INFO"
 
@@ -73,9 +74,9 @@ class TaxiV3(object):
             self.logger.error(f"Setting max_step less than 10 doesn't make sense. Current value: {max_step}")
             sys.exit(1)
 
-        records = 0
         # State after reset: (304, {'prob': 1.0, 'action_mask': array([1, 1, 0, 0, 0, 0], dtype=int8)})
         for r in range(rounds):
+            records = 0
             state, action = self._env.reset()
             step = 0
             for s in range(max_step):
@@ -91,10 +92,10 @@ class TaxiV3(object):
 
     def training_q_learning(self, episodes: int = 10_000, allow_steps: int = 99):
         bar_number = 10
-        sample_rate = 50
+        sample_rate = SAMPLE_RATE
         step_sample_list = []
         self.logger.info(f"Training Q-Learning, with episodes {episodes} and max_step {allow_steps} per episode")
-        # ui_env = gym.wrappers.RecordEpisodeStatistics(self._env, deque_size=episodes)
+
         for b in range(bar_number):
             step_cost_list = []
             with tqdm(total=int(episodes/bar_number), desc=f"Episode {b}", unit="episode") as progress_bar:
@@ -124,14 +125,16 @@ class TaxiV3(object):
                         step_sample_list.append(avg_step)
                     progress_bar.update(1)
 
-        episodes_list = list(range(int(episodes/sample_rate)))
-        plt.plot(episodes_list, step_sample_list)
-        plt.xlabel(f"{sample_rate} Episodes")
-        plt.ylabel(f"Average Steps in {sample_rate} episodes")
-        plt.title('Q-Table on {}'.format('Taxi V3'))
+        el = list(range(int(EPISODES / SAMPLE_RATE)))
+        plt.plot(el, step_sample_list)
+        plt.xlabel(f"{SAMPLE_RATE} Episodes")
+        plt.ylabel(f"Average Steps in {SAMPLE_RATE} episodes")
+        plt.title('Q-Table on {}: discount_rate {} learning rate {}'.format('Taxi V3', REWARD_DISCOUNT_RATE, self._learning_rate))
         plt.show(block=False)
         plt.pause(5)
         plt.close()
+
+        return step_sample_list
 
 
 if __name__ == "__main__":
@@ -145,15 +148,15 @@ if __name__ == "__main__":
                           logger=LOG)
 
     LOG.info(f"Drive taxi in random environment, with 1 round, and each round {PLAY_STEPS} steps")
-    taxi_v3_game.play(random=True, max_step=PLAY_STEPS, rounds=1)
+    taxi_v3_game.play(random=True, max_step=PLAY_STEPS, rounds=ROUNDS)
 
     env_training = gym.make('Taxi-v3', render_mode="rgb_array")
     taxi_v3_game.env = env_training
-    taxi_v3_game.training_q_learning(episodes=EPISODES)
+    sample_list = taxi_v3_game.training_q_learning(episodes=EPISODES)
 
     LOG.info(f"Drive taxi in Trained Q-Learning environment, with {ROUNDS} rounds, and each round {PLAY_STEPS} steps")
     taxi_v3_game.env = env_play
     taxi_v3_game.play(random=False, max_step=PLAY_STEPS, rounds=ROUNDS)
 
-    time.sleep(5)
+    time.sleep(10)
     taxi_v3_game.env.close()
